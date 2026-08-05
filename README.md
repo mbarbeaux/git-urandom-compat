@@ -104,10 +104,10 @@ It triggers:
 
 - on every push to `main` that modifies the `Dockerfile` (or the workflow
   itself);
-- daily (02:00 UTC — ahead of forgejo/gitea-urandom-compat's own 03:00 UTC
-  schedule, so a newly-released Git version is normally already published
-  here by the time those repos look for it), to detect and build any new
-  Git release;
+- daily (00:00 UTC — a 3-hour head start over forgejo-urandom-compat's own
+  03:00 UTC schedule, so a newly-released Git version has time to actually
+  finish building here before that repo looks for it), to detect and
+  build any new Git release;
 - manually, via the repository's *Actions* tab (`workflow_dispatch`), with
   an optional `git_version` input to force a rebuild of one exact release
   even if already published.

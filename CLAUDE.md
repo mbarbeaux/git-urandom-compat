@@ -153,12 +153,17 @@ compare against):
    release is the overall `latest`, also `latest`.
 
 Triggers: push to `main` touching the `Dockerfile` or the workflow
-itself, a daily schedule (02:00 UTC -- ONE HOUR ahead of
-`forgejo-urandom-compat`/`gitea-urandom-compat`'s own 03:00 UTC schedule,
-so a brand new Git release is normally already published here by the
-time those repos' daily runs look for it), and manual `workflow_dispatch`
-(with an optional `git_version` input to force a rebuild of one exact
-release even if already published).
+itself, a daily schedule (00:00 UTC -- a 3-HOUR head start over
+`forgejo-urandom-compat`'s own 03:00 UTC schedule, deliberately more than
+a tight fit: a single-release build across 4 architectures is estimated
+at ~60-75 minutes, extrapolated from `forgejo-urandom-compat`'s own
+observed ~57 minutes for 3 architectures, so 3h leaves real margin for
+variance/retries. `gitea-urandom-compat` isn't part of this timing chain
+yet -- it still runs its own original, pre-`git-urandom-compat` pipeline
+weekly; revisit this gap once it's migrated to consume this repo the same
+way `forgejo-urandom-compat` does), and manual `workflow_dispatch` (with
+an optional `git_version` input to force a rebuild of one exact release
+even if already published).
 
 **Deliberate design choice**: if a consumer repo ever needs a Git version
 that hasn't been built here yet (e.g. this repo's daily cron hasn't caught

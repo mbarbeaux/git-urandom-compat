@@ -15,10 +15,18 @@ name: Build and publish static Git
 # where that redundant compile work actually gets paid, once.
 #
 # Runs on push (if the Dockerfile or this workflow change), on a daily
-# schedule (02:00 UTC, ahead of forgejo/gitea-urandom-compat's 03:00 UTC
-# schedule, so a newly-released Git version is normally already built and
-# published by the time those repos look for it), and manually on demand
-# -- optionally restricted to a single release, which forces a rebuild of
+# schedule (00:00 UTC -- a 3-hour head start over
+# forgejo-urandom-compat's own 03:00 UTC daily schedule, so a newly
+# -released Git version has time to actually finish building here before
+# that repo's discover job looks for it. 3h is a deliberate safety margin,
+# not a tight fit: a single-release build across this repo's 4
+# architectures is estimated at ~60-75 minutes, extrapolated from
+# forgejo-urandom-compat's own observed ~57 minutes for 3 architectures.
+# gitea-urandom-compat isn't part of this timing chain yet -- it still
+# runs its own original, pre-git-urandom-compat pipeline on a weekly
+# schedule; revisit this gap once it's migrated to consume this repo the
+# same way forgejo-urandom-compat does), and manually on demand --
+# optionally restricted to a single release, which forces a rebuild of
 # that release even if already published.
 on:
   push:
@@ -27,7 +35,7 @@ on:
       - Dockerfile
       - .github/workflows/docker-build.yml
   schedule:
-    - cron: "0 2 * * *" # every day at 02:00 UTC
+    - cron: "0 0 * * *" # every day at 00:00 UTC
   workflow_dispatch:
     inputs:
       git_version:
