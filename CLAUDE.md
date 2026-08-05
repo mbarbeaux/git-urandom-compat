@@ -64,7 +64,7 @@ make -j"$(nproc)" \
     LDFLAGS="-static -Wl,--allow-multiple-definition" \
     CURL_LIBCURL="$(pkg-config --static --libs libcurl)" \
     CSPRNG_METHOD= \
-    NO_GETTEXT=1 NO_PERL=1 NO_TCLTK=1 NO_GITWEB=1 \
+    NO_GETTEXT=1 NO_PERL=1 NO_TCLTK=1 NO_GITWEB=1 NO_RUST=1 \
     DESTDIR=/build install
 ```
 
@@ -73,7 +73,15 @@ See the comments in the `Dockerfile` for why each flag is needed
 repository; `-Wl,--allow-multiple-definition` works around a symbol clash
 between Git's own `error()` and a `gnulib` replacement bundled by
 `libidn2`; `CURL_LIBCURL` bypasses Git's own incomplete
-`curl-config --static-libs` detection on Alpine).
+`curl-config --static-libs` detection on Alpine; `NO_RUST=1` avoids
+`cargo build`-ing a Rust subsystem this project doesn't need -- see
+"Points of attention" below, this one is version-sensitive: Git flipped
+its default for this exact flag between 2.54.0 and 2.55.0).
+
+Also required, but at the `apk add` level rather than the `make`
+invocation: `linux-headers`, for `<linux/magic.h>` -- see "Points of
+attention" below, this one is ALSO version-sensitive (needed only from
+Git 2.55.0 onward).
 
 Two build-time checks fail the build (`exit 1`) if not satisfied — a
 successful build is itself proof the fix is active:
@@ -182,7 +190,7 @@ authentication.
 
 ## Points of attention for a future revival
 
-- The FIRST run after this repository's creation has 9 Git releases to
+- The FIRST run after this repository's creation had 9 Git releases to
   build (`>= 2.50.0`, non-RC: 2.50.0, 2.50.1, 2.51.0-2, 2.52.0, 2.53.0,
   2.54.0, 2.55.0). This was deliberately kept small by setting
   `MIN_GIT_VERSION` to 2.50.0 rather than 2.36 (when the bug was
@@ -190,7 +198,19 @@ authentication.
   considered and rejected as pure waste, since neither consumer repo will
   ever request a Git version older than what its own currently-tracked
   oldest release already bundles (2.52.0, as of this writing), and that
-  floor only moves forward over time.
+  floor only moves forward over time. That first run also caught two
+  REAL new build requirements introduced by 2.55.0 specifically (not
+  flakiness -- confirmed by diffing `config.mak.uname`/`Makefile` against
+  2.54.0's): `linux-headers` (for `<linux/magic.h>`, needed by a new Linux
+  fsmonitor backend) and `NO_RUST=1` (Git flipped Rust subsystems from
+  opt-in, `ifndef WITH_RUST`, to opt-out, `ifdef NO_RUST`, meaning a
+  default 2.55.0 build now tries `cargo build` unless told not to). Both
+  are now baked into the Dockerfile permanently -- see "The build recipe"
+  above -- but this is the general lesson: EVERY new Git release, not
+  just old-Alpine-package-rename scenarios, can introduce a build
+  requirement this Dockerfile doesn't yet satisfy. A failed `build` job
+  for a specific version is the normal way this gets caught; check the
+  actual compiler/linker error first, don't assume it's transient.
 - `riscv64` is a newer, less common Alpine target. Package availability
   for all the `-static` variants this build needs was verified manually
   before writing this Dockerfile, and a full end-to-end build (compile +

@@ -19,6 +19,18 @@ FROM alpine:latest AS builder
 # Build dependencies. On recent Alpine releases, static libraries (.a files)
 # were split out of the regular -dev packages into dedicated -static
 # packages, so both are needed for a fully static link.
+#
+# linux-headers: Git 2.55.0 added a Linux fsmonitor backend
+# (config.mak.uname) that -- for ANY system detected as "Linux" --
+# unconditionally adds `-DHAVE_LINUX_MAGIC_H` to BASIC_CFLAGS, regardless
+# of whether that header is actually present. This is the exact same
+# "config.mak.uname forces a flag for Linux no matter what" trap as
+# CSPRNG_METHOD (see below), just for a different feature and a Git
+# version that didn't exist when this Dockerfile was first written --
+# without linux-headers, the build fails with "fatal error: linux/
+# magic.h: No such file or directory" compiling
+# compat/fsmonitor/fsm-path-utils-linux.c, on every Git release from
+# 2.55.0 onward.
 RUN apk add --no-cache \
         build-base \
         autoconf \
@@ -39,7 +51,8 @@ RUN apk add --no-cache \
         zstd-static \
         libpsl-static \
         libidn2-static \
-        libunistring-static
+        libunistring-static \
+        linux-headers
 
 ARG GIT_VERSION
 RUN test -n "${GIT_VERSION}" || (echo "GIT_VERSION build-arg is required" >&2 && exit 1)
@@ -72,6 +85,13 @@ WORKDIR /usr/src/git
 #   curl's "Libs.private" field and reliably includes the full chain.
 # - NO_GETTEXT / NO_PERL / NO_TCLTK / NO_GITWEB: aligned with what Alpine's
 #   own git package doesn't bundle either.
+# - NO_RUST=1: Git's default flipped between 2.54.0 (`ifndef WITH_RUST` --
+#   Rust subsystems opt-in) and 2.55.0 (`ifdef NO_RUST` -- Rust subsystems
+#   opt-OUT), so as of 2.55.0 a default build tries to `cargo build` a
+#   `libgitcore.a`, failing with "cargo: not found" since this image has
+#   no Rust toolchain. Explicitly opting back out avoids needing to add
+#   and statically link a whole second language toolchain for a feature
+#   this project doesn't need.
 RUN CURL_LIBCURL="$(pkg-config --static --libs libcurl)" \
     && echo "Resolved static curl libs: ${CURL_LIBCURL}" \
     && make configure \
@@ -84,6 +104,7 @@ RUN CURL_LIBCURL="$(pkg-config --static --libs libcurl)" \
         NO_PERL=1 \
         NO_TCLTK=1 \
         NO_GITWEB=1 \
+        NO_RUST=1 \
         DESTDIR=/build \
         install
 
