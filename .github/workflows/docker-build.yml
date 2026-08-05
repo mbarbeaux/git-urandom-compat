@@ -1,0 +1,206 @@
+name: Build and publish static Git
+
+# Single branch (main): this workflow discovers every non-RC Git release
+# (git/git tags matching "vX.Y.Z", excluding "-rcN" pre-releases, >=
+# MIN_GIT_VERSION) and builds one statically-linked, /dev/urandom-patched
+# image per release that isn't already published on ghcr.io yet -- a
+# release is never rebuilt once published, since Git's own release tags
+# are immutable (unlike Forgejo/Gitea's floating base-image tags, there is
+# no drift-detection mechanism here by design).
+#
+# forgejo-urandom-compat and gitea-urandom-compat consume this image via
+# `COPY --from=ghcr.io/.../git-urandom-compat:<version>` instead of each
+# recompiling the same Git source independently -- many consecutive
+# Forgejo/Gitea releases bundle the exact same Git version, so this is
+# where that redundant compile work actually gets paid, once.
+#
+# Runs on push (if the Dockerfile or this workflow change), on a daily
+# schedule (02:00 UTC, ahead of forgejo/gitea-urandom-compat's 03:00 UTC
+# schedule, so a newly-released Git version is normally already built and
+# published by the time those repos look for it), and manually on demand
+# -- optionally restricted to a single release, which forces a rebuild of
+# that release even if already published.
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .github/workflows/docker-build.yml
+  schedule:
+    - cron: "0 2 * * *" # every day at 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      git_version:
+        description: >-
+          Exact Git release to (re)build, e.g. "2.52.0". Forces a rebuild
+          even if that release was already published. Leave empty to
+          build every non-RC release (>= 2.36.0) not yet published.
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Git 2.36 is what introduced the unconditional getrandom(2) call this
+  # whole repository exists to patch around -- versions before it never
+  # had the bug, so there is nothing to gain from building them here.
+  MIN_GIT_VERSION: 2.36.0
+
+jobs:
+  # Diffs every non-RC Git release against what this repository has
+  # already published on ghcr.io, and exposes the difference to the build
+  # job as a matrix (one job per missing release). "latest" is always
+  # computed from the FULL upstream release list (not just the ones
+  # actually built this run), so a manual single-release dispatch never
+  # mislabels an old release as "latest".
+  discover:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      versions: ${{ steps.discover.outputs.versions }}
+      latest: ${{ steps.discover.outputs.latest }}
+    steps:
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - name: Discover missing Git releases
+        id: discover
+        env:
+          REQUESTED_VERSION: ${{ inputs.git_version }}
+        run: |
+          set -euo pipefail
+
+          # git ls-remote avoids GitHub REST API pagination and rate
+          # limits entirely -- git/git has 1000+ tags across its full
+          # history. --refs excludes the peeled "^{}" duplicate entries
+          # for annotated tags.
+          #
+          # grep exits 1 when nothing matches; under pipefail that would
+          # otherwise take down the whole pipeline (and the script, under
+          # -e) even though "no matching tags" is a perfectly normal
+          # outcome here -- neutralize it with `|| true`.
+          upstream_versions="$(git ls-remote --tags --refs https://github.com/git/git.git \
+            | awk '{print $2}' | sed 's|refs/tags/||' \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+            | sed 's/^v//' \
+            | awk -F. -v min="${MIN_GIT_VERSION}" '
+                BEGIN { split(min, m, ".") }
+                ($1>m[1]) || ($1==m[1] && $2>m[2]) || ($1==m[1] && $2==m[2] && $3>=m[3]) {print}
+              ' \
+            | sort -t. -k1,1n -k2,2n -k3,3n)"
+
+          if [ -z "${upstream_versions}" ]; then
+            echo "No matching Git releases found (>= ${MIN_GIT_VERSION}, non-RC)" >&2
+            exit 1
+          fi
+
+          latest="$(echo "${upstream_versions}" | tail -n1)"
+
+          # Log in read-only to check our own already-published tags, even
+          # if the ghcr.io package is private. A missing package (first
+          # ever run) is not an error: it just means nothing is built yet.
+          echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login "${REGISTRY}" \
+            --username "${{ github.actor }}" --password-stdin
+
+          if built_raw="$(skopeo list-tags "docker://${REGISTRY}/${IMAGE_NAME}" 2>/dev/null)"; then
+            built_versions="$(echo "${built_raw}" | jq -r '.Tags[]?' | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -u)"
+          else
+            echo "No existing ${IMAGE_NAME} package found on ${REGISTRY} yet -- nothing considered built so far."
+            built_versions=""
+          fi
+
+          if [ -n "${REQUESTED_VERSION}" ]; then
+            if ! echo "${upstream_versions}" | grep -qx "${REQUESTED_VERSION}"; then
+              echo "Requested version '${REQUESTED_VERSION}' was not found among published upstream Git releases:" >&2
+              echo "${upstream_versions}" >&2
+              exit 1
+            fi
+            echo "Manual override: forcing a rebuild of ${REQUESTED_VERSION} regardless of already-built state."
+            to_build="${REQUESTED_VERSION}"
+          else
+            to_build="$(comm -23 <(echo "${upstream_versions}") <(echo "${built_versions}" | sed '/^$/d'))"
+          fi
+
+          echo "Upstream Git releases (>= ${MIN_GIT_VERSION}, non-RC):"
+          echo "${upstream_versions}"
+          echo "Already published on ${REGISTRY}:"
+          echo "${built_versions:-<none>}"
+          echo "Latest: ${latest}"
+          echo "To build this run:"
+          echo "${to_build:-<nothing -- everything already built>}"
+
+          {
+            echo "versions=$(echo "${to_build}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+            echo "latest=${latest}"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    # Empty matrix (nothing new to build) -> skip the job entirely instead
+    # of spinning up a no-op run.
+    if: needs.discover.outputs.versions != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      # Caps concurrent pushes to ghcr.io to avoid tripping GitHub's
+      # secondary API rate limit during a large catch-up run (this bit
+      # forgejo-urandom-compat on its first run under a similar matrix
+      # design).
+      max-parallel: 4
+      matrix:
+        git_version: ${{ fromJson(needs.discover.outputs.versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # GitHub-hosted runners are amd64 only. QEMU lets buildx also
+      # produce the other architectures -- the UNION of what
+      # forgejo-urandom-compat (amd64/arm64/arm/v6) and
+      # gitea-urandom-compat (amd64/arm64/riscv64) each need, so a single
+      # published tag here serves both.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ matrix.git_version }}
+            type=raw,value=latest,enable=${{ matrix.git_version == needs.discover.outputs.latest }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          build-args: |
+            GIT_VERSION=${{ matrix.git_version }}
+          # Union of architectures needed by forgejo-urandom-compat
+          # (amd64/arm64/arm/v6) and gitea-urandom-compat
+          # (amd64/arm64/riscv64) -- verified riscv64 builds successfully
+          # despite being a newer Alpine target (see CLAUDE.md).
+          platforms: linux/amd64,linux/arm64,linux/arm/v6,linux/riscv64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
