@@ -86,9 +86,14 @@ This repository includes a GitHub Actions workflow
 (`.github/workflows/docker-build.yml`) that automatically builds and
 publishes an image to **GitHub Container Registry** for every non-RC Git
 release (tags matching `vX.Y.Z`, excluding `-rcN` pre-releases) that is
-`>= 2.36.0` — the version that introduced the unconditional `getrandom(2)`
-call this repository exists to patch around; versions before it never had
-the bug, so there's nothing to gain from building them.
+`>= MIN_GIT_VERSION` (currently `2.50.0`). The bug this repository patches
+around was introduced in Git 2.36, but building every release since then
+(~80 versions) would be pure waste: `forgejo-urandom-compat` and
+`gitea-urandom-compat` only ever request whichever Git version is actually
+bundled in the Forgejo/Gitea release they're building, and neither project
+moves that version backwards over time. `2.50.0` is a floor with a small
+buffer below what's actually in use today (Forgejo 15.x / Gitea 1.26.x ->
+Git 2.52.0, Gitea 1.27.x -> Git 2.54.0).
 
 A release is **built once and never rebuilt**: Git's own release tags are
 immutable, so once `2.52.0` is published here, there's no drift to detect or

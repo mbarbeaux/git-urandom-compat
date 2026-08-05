@@ -34,7 +34,7 @@ on:
         description: >-
           Exact Git release to (re)build, e.g. "2.52.0". Forces a rebuild
           even if that release was already published. Leave empty to
-          build every non-RC release (>= 2.36.0) not yet published.
+          build every non-RC release (>= MIN_GIT_VERSION) not yet published.
         required: false
         type: string
 
@@ -45,10 +45,17 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Git 2.36 is what introduced the unconditional getrandom(2) call this
-  # whole repository exists to patch around -- versions before it never
-  # had the bug, so there is nothing to gain from building them here.
-  MIN_GIT_VERSION: 2.36.0
+  # The bug this repository patches around was introduced in Git 2.36, but
+  # building every release since then (~80 versions) would be pure waste:
+  # forgejo-urandom-compat and gitea-urandom-compat only ever request the
+  # Git version actually bundled in whichever Forgejo/Gitea release they
+  # track (their own MIN_MAJOR_VERSION floors), and neither project can
+  # move that version backwards over time. 2.50.0 was chosen as a floor
+  # with a small buffer below what's actually in use today (Forgejo
+  # 15.x/Gitea 1.26.x -> Git 2.52.0, Gitea 1.27.x -> Git 2.54.0) -- see
+  # CLAUDE.md if this ever needs revisiting (e.g. a new consumer needing
+  # an older version, or the floor needing to move forward).
+  MIN_GIT_VERSION: 2.50.0
 
 jobs:
   # Diffs every non-RC Git release against what this repository has

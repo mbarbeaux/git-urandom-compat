@@ -131,8 +131,10 @@ compare against):
    has 1000+ tags across its full history). Filters to `vX.Y.Z` exactly
    (excludes `-rcN` pre-releases and older `vX.Y.Z.W`-style tags),
    strips the `v` prefix, keeps only `>= MIN_GIT_VERSION` (currently
-   `2.36.0` — the version that introduced the bug; nothing before it is
-   useful to build). Diffs that list against this repository's own
+   `2.50.0` — NOT the version that introduced the bug (2.36), but a floor
+   just below what Forgejo/Gitea's currently-tracked oldest releases
+   actually bundle; see the "MIN_GIT_VERSION" point of attention below for
+   the full reasoning). Diffs that list against this repository's own
    already-published `ghcr.io` tags (read-only `skopeo login` +
    `list-tags`, same pattern as `forgejo-urandom-compat`) to compute the
    build matrix (`versions` output) — an already-built release is simply
@@ -175,12 +177,15 @@ authentication.
 
 ## Points of attention for a future revival
 
-- The FIRST run after this repository's creation has ~80 Git releases to
-  build (`>= 2.36.0`, non-RC) -- unlike `forgejo-urandom-compat`'s
-  one-time catch-up of 10 releases, this is a much larger initial batch.
-  `max-parallel: 4` bounds concurrent pushes but not overall wall-clock
-  time; expect the first run to take many hours even though it costs
-  nothing (public repo = free GitHub-hosted Actions minutes).
+- The FIRST run after this repository's creation has 9 Git releases to
+  build (`>= 2.50.0`, non-RC: 2.50.0, 2.50.1, 2.51.0-2, 2.52.0, 2.53.0,
+  2.54.0, 2.55.0). This was deliberately kept small by setting
+  `MIN_GIT_VERSION` to 2.50.0 rather than 2.36 (when the bug was
+  introduced) -- building the full ~80-release range back to 2.36 was
+  considered and rejected as pure waste, since neither consumer repo will
+  ever request a Git version older than what its own currently-tracked
+  oldest release already bundles (2.52.0, as of this writing), and that
+  floor only moves forward over time.
 - `riscv64` is a newer, less common Alpine target. Package availability
   for all the `-static` variants this build needs was verified manually
   before writing this Dockerfile, and a full end-to-end build (compile +
@@ -200,10 +205,16 @@ authentication.
   automatically).
 - If Git ever changes its release tag naming scheme (currently
   `vX.Y.Z`, e.g. `v2.52.0`), the `discover` job's regex needs updating.
-- `MIN_GIT_VERSION` (currently `2.36.0`) is a workflow-level env var in
-  `docker-build.yml` -- there should be no reason to change it, since it's
-  tied to when the underlying bug was introduced, not to any
-  consumer-side policy.
+- `MIN_GIT_VERSION` (currently `2.50.0`) is a workflow-level env var in
+  `docker-build.yml`, deliberately set to track consumer-side need rather
+  than the bug's origin (Git 2.36) -- see the point above. Bump it forward
+  if Forgejo/Gitea's own MIN_MAJOR_VERSION floors ever advance far enough
+  that the oldest Git version either project still needs moves past it
+  too -- there's no need to ever move it backward on its own, since an
+  excluded older release will never be requested again by either
+  existing consumer. If a third consumer repo is ever added and needs an
+  older Git version than what's currently published here, lower it and
+  let `discover` backfill the gap on its next run.
 
 ## License
 
