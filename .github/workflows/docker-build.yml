@@ -139,7 +139,12 @@ jobs:
             echo "Manual override: forcing a rebuild of ${REQUESTED_VERSION} regardless of already-built state."
             to_build="${REQUESTED_VERSION}"
           else
-            to_build="$(comm -23 <(echo "${upstream_versions}") <(echo "${built_versions}" | sed '/^$/d'))"
+            # comm needs both inputs in plain lexical order, which
+            # upstream_versions' numeric (version) sort is not once a
+            # two-digit component appears (2.56.10 sorts before 2.56.2
+            # lexically) -- re-sort both sides here, locally, so the
+            # numeric order stays intact everywhere else.
+            to_build="$(comm -23 <(echo "${upstream_versions}" | LC_ALL=C sort) <(echo "${built_versions}" | sed '/^$/d' | LC_ALL=C sort))"
           fi
 
           echo "Upstream Git releases (>= ${MIN_GIT_VERSION}, non-RC):"
